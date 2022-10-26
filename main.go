@@ -4,12 +4,21 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
+
+	tcpip "sstp/tcpip"
 )
 
 const (
-	debug = true
+	debug = false
+)
+
+var (
+	sstpConn           *tls.Conn
+	myIP, yourIP, dns1 int
 )
 
 func printBytes(buf []byte) {
@@ -100,6 +109,7 @@ func read(conn *tls.Conn) []byte {
 }
 
 func sstp(conn *tls.Conn) {
+	sstpConn = conn
 	{
 		ctrlpacket := []byte{}
 		// SSTP_MSG_CALL_CONNECT_REQUEST
@@ -114,25 +124,358 @@ func sstp(conn *tls.Conn) {
 		ctrlpacket = append(ctrlpacket, 0x00, 0x01)
 		send(conn, ctrlpacket, false)
 	}
-	if read(conn)[1] != 0x02 {
-		// SSTP_MSG_CALL_CONNECT_ACK
-		fmt.Println("Cannot receive ACK.")
+	// if read(conn)[1] != 0x02 {
+	// 	// SSTP_MSG_CALL_CONNECT_ACK
+	// 	fmt.Println("Cannot receive ACK.")
+	// 	return
+	// }
+	// {
+	// 	ctrlpacket := []byte{}
+	// 	// SSTP_MSG_CALL_CONNECTED
+	// 	ctrlpacket = append(ctrlpacket, 0x00, 0x04)
+	// 	// Num Attributes
+	// 	ctrlpacket = append(ctrlpacket, 0x00, 0x00)
+	// 	send(conn, ctrlpacket, true)
+	// }
+	fmt.Println("OK")
+	for {
+		parse(read(conn))
+	}
+}
+
+func sendIPPacket(packet []byte) {
+	tmp := []byte{
+		byte(0x00), byte(0x21),
+	}
+	tmp = append(tmp, packet...)
+	sendPacket(tmp)
+}
+
+func calcSequenceNumber(packet []byte, add uint32) []byte {
+	var sum uint32
+	sum = binary.BigEndian.Uint32(packet) + add
+
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, sum)
+
+	return b
+}
+
+func parseTCP(packet []byte) tcpip.TCPHeader {
+	tcp := tcpip.TCPHeader{
+		SourcePort:       packet[0:2],
+		DestPort:         packet[2:4],
+		SequenceNumber:   packet[4:8],
+		AcknowlegeNumber: packet[8:12],
+		HeaderLength:     []byte{packet[12]},
+		ControlFlags:     []byte{packet[13]},
+		WindowSize:       packet[14:16],
+		Checksum:         packet[16:18],
+		UrgentPointer:    packet[18:20],
+	}
+	header_length := (packet[12] >> 4) * 4
+	tcp.TCPData = packet[header_length:]
+
+	return tcp
+}
+
+func parseIP(packet []byte) {
+	synack := parseTCP(packet[20:])
+	IP2 := 0
+	IP2 |= int(packet[12]) << 24
+	IP2 |= int(packet[13]) << 16
+	IP2 |= int(packet[14]) << 8
+	IP2 |= int(packet[15]) << 0
+	IP := 0
+	IP |= int(packet[16]) << 24
+	IP |= int(packet[17]) << 16
+	IP |= int(packet[18]) << 8
+	IP |= int(packet[19]) << 0
+	// 0x12 = SYNACK, 0x11 = FINACK, 0x10 = ACK
+	if IP != myIP {
 		return
 	}
-	{
-		ctrlpacket := []byte{}
-		// SSTP_MSG_CALL_CONNECTED
-		ctrlpacket = append(ctrlpacket, 0x00, 0x04)
-		// Num Attributes
-		ctrlpacket = append(ctrlpacket, 0x00, 0x00)
-		send(conn, ctrlpacket, true)
+	fmt.Printf("Flag: %02x, IP: %08x\n",
+		synack.ControlFlags[0], IP2)
+	if IP2 != 0xd307e6d0 {
+		return
 	}
-	fmt.Println("OK")
+	if synack.ControlFlags[0]|tcpip.SYNACK != 0 {
+		printBytes(packet[:20])
+		// SYNACKに対してACKを送り返す
+		dest := "211.7.230.208"
+		var port uint16 = 80
+		ack := tcpip.TCPIP{
+			DestIP:    dest,
+			DestPort:  port,
+			TcpFlag:   "ACK",
+			SeqNumber: synack.AcknowlegeNumber,
+			AckNumber: calcSequenceNumber(synack.SequenceNumber,
+				1),
+		}
+		ackPacket := tcpip.NewTamTCPIP(ack, myIP)
+		printBytes(ackPacket)
+		sendIPPacket(ackPacket)
+	} else {
+		fmt.Print(string(packet[40:]))
+		os.Exit(0)
+	}
+}
+
+func wget() {
+	dest := "211.7.230.208"
+	var port uint16 = 80
+
+	syn := tcpip.TCPIP{
+		DestIP:   dest,
+		DestPort: port,
+		TcpFlag:  "SYN",
+	}
+	synPacket := tcpip.NewTamTCPIP(syn, myIP)
+	printBytes(synPacket)
+	sendIPPacket(synPacket)
+
+	// req := tcpip.NewHttpGetRequest("/", "localhost:80")
+	// pshack := tcpip.TCPIP{
+	// 	DestIP:    dest,
+	// 	DestPort:  port,
+	// 	TcpFlag:   "PSHACK",
+	// 	SeqNumber: ack.SeqNumber,
+	// 	AckNumber: ack.AckNumber,
+	// 	Data:      req.ReqtoByteArr(req),
+	// }
+	// tcpip.SendToNginx(sendfd, pshack)
+}
+
+func sendPacket(packet []byte) {
+	tmp := []byte{byte(0xff), byte(0x03)}
+	tmp = append(tmp, packet...)
+	send(sstpConn, tmp, false)
+}
+
+func sendPAPInfo(lcpID int, username, password string) {
+	// pap length
+	length := 4 + len(username) + 1 + len(password) + 1
+	buf := []byte{
+		byte(0xc0), byte(0x23),
+		byte(0x01), // PAP_REQ
+		byte(lcpID),
+		byte(length >> 8), byte(0xff & length),
+	}
+	buf = append(buf, byte(len(username)))
+	buf = append(buf, []byte(username)...)
+	buf = append(buf, byte(len(password)))
+	buf = append(buf, []byte(password)...)
+	sendPacket(buf)
+}
+
+func sendLcpPapAck(lcpId int) {
+	len := 8
+	lcp_ack := []byte{
+		byte(0xc0), 0x21,
+		2 /* ACK */, byte(lcpId), /*lcp id */
+		(byte)(len >> 8), (byte)(0xff & len),
+		3 /* auth */, 4, /* len */
+		byte(0xc0), byte(0x23), // PAP
+	}
+	sendPacket(lcp_ack)
+}
+
+func sendLcpEchoReq(lcpId int) {
+	len := 8
+	lcp_ack := []byte{
+		byte(0xc0), 0x21,
+		0x09 /* ECHO Request */, byte(lcpId), /*lcp id */
+		(byte)(len >> 8), (byte)(0xff & len),
+		3 /* auth */, 4, /* len */
+		byte(0xc0), byte(0x23), // PAP
+	}
+	sendPacket(lcp_ack)
+}
+
+func sendIPCPConfREQ(lcpId, IP int) {
+	sbuf := []byte{
+		byte(0x80), byte(0x21), // IPCP
+		byte(0x01), // REQ
+		byte(lcpId),
+		byte(0), byte(10), // length
+		byte(0x03), byte(0x06), // ip-address 0.0.0.0
+		byte(IP >> 24),
+		byte(IP >> 16),
+		byte(IP >> 8),
+		byte(IP >> 0),
+	}
+	sendPacket(sbuf)
+}
+
+func sendIPCPConfACK(lcpId, IP int) {
+	sbuf := []byte{
+		byte(0x80), byte(0x21), // IPCP
+		byte(0x02), // ACK
+		byte(lcpId),
+		byte(0), byte(10), // length
+		byte(0x03), byte(0x06), // ip-address 0.0.0.0
+		byte(IP >> 24),
+		byte(IP >> 16),
+		byte(IP >> 8),
+		byte(IP >> 0),
+	}
+	sendPacket(sbuf)
+}
+
+func sendIPCPConfNAK(lcpId, IP int) {
+	sbuf := []byte{
+		byte(0x80), byte(0x21), // IPCP
+		byte(0x03), // NAK
+		byte(lcpId),
+		byte(0), byte(10), // length
+		byte(0x03), byte(0x06), // ip-address 0.0.0.0
+		byte(IP >> 24),
+		byte(IP >> 16),
+		byte(IP >> 8),
+		byte(IP >> 0),
+	}
+	sendPacket(sbuf)
+}
+
+func sendIPCPConfREQwithIP(lcpId, IP, dns1 int) {
+	sbuf := []byte{
+		byte(0x80), byte(0x21), // IPCP
+		byte(0x01), // REQ
+		byte(lcpId),
+		byte(0), byte(16), // length
+		byte(0x03), byte(0x06), // ip-address 0.0.0.0
+		byte(IP >> 24),
+		byte(IP >> 16),
+		byte(IP >> 8),
+		byte(IP >> 0),
+		byte(0x81), byte(0x06), // ip-address 0.0.0.0
+		byte(dns1 >> 24),
+		byte(dns1 >> 16),
+		byte(dns1 >> 8),
+		byte(dns1 >> 0),
+	}
+	sendPacket(sbuf)
+}
+
+func sendIPCPConfACKwithIP(lcpId, IP, dns1 int) {
+	sbuf := []byte{
+		byte(0x80), byte(0x21), // IPCP
+		byte(0x02), // ACK
+		byte(lcpId),
+		byte(0), byte(16), // length
+		byte(0x03), byte(0x06), // ip-address 0.0.0.0
+		byte(IP >> 24),
+		byte(IP >> 16),
+		byte(IP >> 8),
+		byte(IP >> 0),
+		byte(0x81), byte(0x06), // ip-address 0.0.0.0
+		byte(dns1 >> 24),
+		byte(dns1 >> 16),
+		byte(dns1 >> 8),
+		byte(dns1 >> 0),
+	}
+	sendPacket(sbuf)
+}
+
+func parseIPCP(packet []byte) {
+	code := packet[0]
+	lcpID := packet[1]
+	if code == 0x01 { // REQ
+		IP := 0
+		IP |= int(packet[6]) << 24
+		IP |= int(packet[7]) << 16
+		IP |= int(packet[8]) << 8
+		IP |= int(packet[9]) << 0
+		yourIP = IP
+		sendIPCPConfACK(int(lcpID), IP)
+	} else if code == 0x03 { // NAK
+		IP := 0
+		IP |= int(packet[6]) << 24
+		IP |= int(packet[7]) << 16
+		IP |= int(packet[8]) << 8
+		IP |= int(packet[9]) << 0
+		dns1 := 0
+		if len(packet) > 12 {
+			dns1 |= int(packet[12]) << 24
+			dns1 |= int(packet[13]) << 16
+			dns1 |= int(packet[14]) << 8
+			dns1 |= int(packet[15]) << 0
+		}
+		if dns1 != 0 {
+			sendIPCPConfREQwithIP(int(lcpID+2),
+				IP, dns1)
+		} else {
+			sendIPCPConfREQ(int(lcpID), IP)
+		}
+	} else if code == 0x04 { // REJ
+		// sendIPCPConfREQ(int(lcpID+1), 0)
+	} else if code == 0x02 { // ACK
+		IP := 0
+		IP |= int(packet[6]) << 24
+		IP |= int(packet[7]) << 16
+		IP |= int(packet[8]) << 8
+		IP |= int(packet[9]) << 0
+		dns1 = 0
+		if len(packet) > 12 {
+			dns1 |= int(packet[12]) << 24
+			dns1 |= int(packet[13]) << 16
+			dns1 |= int(packet[14]) << 8
+			dns1 |= int(packet[15]) << 0
+		}
+		// sendIPCPConfACKwithIP(int(lcpID),
+		// 	myIP, dns1)
+		myIP = IP
+		fmt.Printf("YourIP: %08x, MyIP: %08x, DNS1: %08x\n",
+			yourIP, myIP, dns1)
+		// sendLcpEchoReq(int(lcpID))
+		wget()
+	}
+}
+
+func parseLCP(packet []byte) {
+	code := packet[0]
+	lcpID := packet[1]
+	if code == 0x01 { // REQ
+		sendLcpPapAck(int(lcpID))
+		sendPAPInfo(int(lcpID),
+			"vpn", "vpn")
+		return
+	} else if code == 0x04 { // REJ
+		return
+	} else if code == 0x09 {
+		// ECHO Request
+	} else if code == 0x0a {
+		// ECHO Response
+		// sendLcpEchoReq(int(lcpID + 1))
+	}
+}
+
+func parse(packet []byte) {
+	packetType := int(packet[2])<<8 | int(packet[3])
+	fmt.Printf("Packet Type: %04x\n", packetType)
+	if packetType == 0xc021 {
+		// LCP
+		parseLCP(packet[4:])
+	} else if packetType == 0xc023 {
+		// PAP
+		if packet[4] == 0x02 {
+			fmt.Println("OK")
+			// sendPacket(packet[2:])
+			sendIPCPConfREQwithIP(int(packet[5]), 0, 0)
+			// sendIPCPConfREQ(int(packet[5]), 0)
+		}
+	} else if packetType == 0x8021 {
+		// IPCP
+		parseIPCP(packet[4:])
+	} else if packetType == 0x0021 {
+		parseIP(packet[4:])
+	}
 }
 
 func main() {
 	// https://www.vpngate.net/ja/
-	host := "public-vpn-43.opengw.net"
+	host := "public-vpn-218.opengw.net"
 	conn, err := tls.Dial("tcp",
 		host+":443",
 		&tls.Config{})
@@ -163,4 +506,5 @@ func main() {
 		}
 	}
 	sstp(conn)
+	// wget()
 }
