@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 
 	tcpip "sstp/tcpip"
 )
@@ -230,9 +231,26 @@ func parseIP(packet []byte) {
 		sendIPPacket(pshPacket)
 
 		fmt.Print(string(packet[40:]))
+	} else if synack.ControlFlags[0]&tcpip.FINACK == tcpip.FINACK {
+		fmt.Print(string(packet[40:]))
+		os.Exit(0)
 	} else {
 		fmt.Print(string(packet[40:]))
-		// os.Exit(0)
+		// IPヘッダを省いて20byte目からのTCPパケットをパースする
+		serverPshack := synack
+		dest := "211.7.230.208"
+		var port uint16 = 80
+		finack := tcpip.TCPIP{
+			DestIP:    dest,
+			DestPort:  port,
+			TcpFlag:   "FINACK",
+			SeqNumber: serverPshack.AcknowlegeNumber,
+			AckNumber: calcSequenceNumber(serverPshack.SequenceNumber,
+				uint32(len(packet)-40)),
+		}
+		finackPacket := tcpip.NewTamTCPIP(finack, myIP)
+		printBytes(finackPacket)
+		sendIPPacket(finackPacket)
 	}
 }
 
