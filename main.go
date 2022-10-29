@@ -150,6 +150,7 @@ func sstp(conn *tls.Conn) {
 }
 
 func sendIPPacket(packet []byte) {
+	printBytes(packet)
 	tmp := []byte{
 		byte(0x00), byte(0x21),
 	}
@@ -227,7 +228,6 @@ func parseIP(packet []byte) {
 				1),
 		}
 		ackPacket := tcpip.NewTamTCPIP(ack, myIP)
-		printBytes(ackPacket)
 		sendIPPacket(ackPacket)
 
 		req := tcpip.NewHttpGetRequest("/", "localhost:80")
@@ -240,23 +240,21 @@ func parseIP(packet []byte) {
 			Data:      req.ReqtoByteArr(req),
 		}
 		pshPacket := tcpip.NewTamTCPIP(pshack, myIP)
-		printBytes(pshPacket)
 		sendIPPacket(pshPacket)
 	} else if synack.ControlFlags[0]&tcpip.FINACK == tcpip.FINACK {
 		os.Exit(0)
 	} else {
-		// IPヘッダを省いて20byte目からのTCPパケットをパースする
 		serverPshack := synack
 		finack := tcpip.TCPIP{
 			DestIP:    destHost,
 			DestPort:  destPort,
 			TcpFlag:   "FINACK",
 			SeqNumber: serverPshack.AcknowlegeNumber,
-			AckNumber: calcSequenceNumber(serverPshack.SequenceNumber,
-				uint32(len(packet)-40)),
+			AckNumber: calcSequenceNumber(
+				serverPshack.SequenceNumber,
+				uint32(len(synack.TCPData))),
 		}
 		finackPacket := tcpip.NewTamTCPIP(finack, myIP)
-		printBytes(finackPacket)
 		sendIPPacket(finackPacket)
 	}
 }
@@ -268,7 +266,6 @@ func startTCP() {
 		TcpFlag:  "SYN",
 	}
 	synPacket := tcpip.NewTamTCPIP(syn, myIP)
-	printBytes(synPacket)
 	sendIPPacket(synPacket)
 }
 
