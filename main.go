@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	tcpip "sstp/tcpip"
 )
 
 const (
-	debug           = false
+	debug = false
+	// https://www.vpngate.net/ja/
+	sstpHost string = "vpn591814087.opengw.net"
+	sstpPort int    = 443
 	destHost string = "211.7.230.208"
 	destPort uint16 = 80
 )
@@ -258,12 +262,9 @@ func parseIP(packet []byte) {
 }
 
 func startTCP() {
-	dest := "211.7.230.208"
-	var port uint16 = 80
-
 	syn := tcpip.TCPIP{
-		DestIP:   dest,
-		DestPort: port,
+		DestIP:   destHost,
+		DestPort: destPort,
 		TcpFlag:  "SYN",
 	}
 	synPacket := tcpip.NewTamTCPIP(syn, myIP)
@@ -498,11 +499,8 @@ func parse(packet []byte) {
 }
 
 func main() {
-	// https://www.vpngate.net/ja/
-	host := "public-vpn-218.opengw.net"
-	host = "vpn591814087.opengw.net"
 	conn, err := tls.Dial("tcp",
-		host+":443",
+		sstpHost+":"+strconv.Itoa(sstpPort),
 		&tls.Config{
 			InsecureSkipVerify: true,
 		})
@@ -513,7 +511,7 @@ func main() {
 	{
 		header := "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\n" +
 			"Content-Length: 18446744073709551615\n" +
-			"Host: " + host + "\n" +
+			"Host: " + sstpHost + "\n" +
 			"SSTPCORRELATIONID: DroidSSTP\n" +
 			"\n"
 		conn.Write([]byte(header))
@@ -533,5 +531,4 @@ func main() {
 		}
 	}
 	sstp(conn)
-	// wget()
 }
