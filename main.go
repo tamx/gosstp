@@ -34,6 +34,15 @@ func printBytes(buf []byte) {
 	fmt.Println()
 }
 
+func bytes2IP(packet []byte) int {
+	IP := 0
+	IP |= int(packet[0]) << 24
+	IP |= int(packet[1]) << 16
+	IP |= int(packet[2]) << 8
+	IP |= int(packet[3]) << 0
+	return IP
+}
+
 func send(conn *tls.Conn, buf []byte, ctrl bool) {
 	version := 0x10
 	reserved := 0x00
@@ -188,35 +197,22 @@ func parseTCP(packet []byte) tcpip.TCPHeader {
 
 func parseIP(packet []byte) {
 	synack := parseTCP(packet[20:])
-	IP2 := 0
-	IP2 |= int(packet[12]) << 24
-	IP2 |= int(packet[13]) << 16
-	IP2 |= int(packet[14]) << 8
-	IP2 |= int(packet[15]) << 0
-	IP := 0
-	IP |= int(packet[16]) << 24
-	IP |= int(packet[17]) << 16
-	IP |= int(packet[18]) << 8
-	IP |= int(packet[19]) << 0
-	// 0x12 = SYNACK, 0x11 = FINACK, 0x10 = ACK
-	if IP != myIP {
+	if destIP := bytes2IP(packet[16:20]); destIP != myIP {
 		return
 	}
-	fmt.Printf("Flag: %02x, IP: %08x\n",
-		synack.ControlFlags[0], IP2)
 	{
-		destIPbytes := tcpip.Iptobyte(destHost)
-		destIP := 0
-		destIP |= int(destIPbytes[0]) << 24
-		destIP |= int(destIPbytes[1]) << 16
-		destIP |= int(destIPbytes[2]) << 8
-		destIP |= int(destIPbytes[3]) << 0
-		if IP2 != destIP {
+		srcIP := bytes2IP(packet[12:16])
+		fmt.Printf("Flag: %02x, IP: %08x\n",
+			synack.ControlFlags[0], srcIP)
+		targetIPbytes := tcpip.Iptobyte(destHost)
+		targetIP := bytes2IP(targetIPbytes)
+		if srcIP != targetIP {
 			return
 		}
 	}
 	printBytes(packet)
 	fmt.Println(string(synack.TCPData))
+	// 0x12 = SYNACK, 0x11 = FINACK, 0x10 = ACK
 	if synack.ControlFlags[0]&tcpip.SYNACK == tcpip.SYNACK {
 		// SYNACKに対してACKを送り返す
 		ack := tcpip.TCPIP{
@@ -404,25 +400,14 @@ func parseIPCP(packet []byte) {
 	code := packet[0]
 	lcpID := packet[1]
 	if code == 0x01 { // REQ
-		IP := 0
-		IP |= int(packet[6]) << 24
-		IP |= int(packet[7]) << 16
-		IP |= int(packet[8]) << 8
-		IP |= int(packet[9]) << 0
+		IP := bytes2IP(packet[6:10])
 		yourIP = IP
 		sendIPCPConfACK(int(lcpID), IP)
 	} else if code == 0x03 { // NAK
-		IP := 0
-		IP |= int(packet[6]) << 24
-		IP |= int(packet[7]) << 16
-		IP |= int(packet[8]) << 8
-		IP |= int(packet[9]) << 0
+		IP := bytes2IP(packet[6:10])
 		dns1 := 0
 		if len(packet) > 12 {
-			dns1 |= int(packet[12]) << 24
-			dns1 |= int(packet[13]) << 16
-			dns1 |= int(packet[14]) << 8
-			dns1 |= int(packet[15]) << 0
+			dns1 = bytes2IP(packet[12:16])
 		}
 		if dns1 != 0 {
 			sendIPCPConfREQwithIP(int(lcpID+2),
@@ -433,20 +418,11 @@ func parseIPCP(packet []byte) {
 	} else if code == 0x04 { // REJ
 		// sendIPCPConfREQ(int(lcpID+1), 0)
 	} else if code == 0x02 { // ACK
-		IP := 0
-		IP |= int(packet[6]) << 24
-		IP |= int(packet[7]) << 16
-		IP |= int(packet[8]) << 8
-		IP |= int(packet[9]) << 0
+		IP := bytes2IP(packet[6:10])
 		dns1 = 0
 		if len(packet) > 12 {
-			dns1 |= int(packet[12]) << 24
-			dns1 |= int(packet[13]) << 16
-			dns1 |= int(packet[14]) << 8
-			dns1 |= int(packet[15]) << 0
+			dns1 = bytes2IP(packet[12:16])
 		}
-		// sendIPCPConfACKwithIP(int(lcpID),
-		// 	myIP, dns1)
 		myIP = IP
 		fmt.Printf("YourIP: %08x, MyIP: %08x, DNS1: %08x\n",
 			yourIP, myIP, dns1)
@@ -473,6 +449,15 @@ func parseLCP(packet []byte) {
 	}
 }
 
+func parsePAP(packet []byte) {
+	code := packet[0]
+	lcpID := packet[1]
+	if code == 0x02 { // ACK
+		fmt.Println("OK")
+		sendIPCPConfREQwithIP(int(lcpID), 0, 0)
+	}
+}
+
 func parse(packet []byte) {
 	packetType := int(packet[2])<<8 | int(packet[3])
 	fmt.Printf("Packet Type: %04x\n", packetType)
@@ -481,12 +466,7 @@ func parse(packet []byte) {
 		parseLCP(packet[4:])
 	} else if packetType == 0xc023 {
 		// PAP
-		if packet[4] == 0x02 {
-			fmt.Println("OK")
-			// sendPacket(packet[2:])
-			sendIPCPConfREQwithIP(int(packet[5]), 0, 0)
-			// sendIPCPConfREQ(int(packet[5]), 0)
-		}
+		parsePAP(packet[4:])
 	} else if packetType == 0x8021 {
 		// IPCP
 		parseIPCP(packet[4:])
@@ -509,7 +489,7 @@ func main() {
 		header := "SSTP_DUPLEX_POST /sra_{BA195980-CD49-458b-9E23-C84EE0ADCD75}/ HTTP/1.1\n" +
 			"Content-Length: 18446744073709551615\n" +
 			"Host: " + sstpHost + "\n" +
-			"SSTPCORRELATIONID: DroidSSTP\n" +
+			"SSTPCORRELATIONID: TamSSTP\n" +
 			"\n"
 		conn.Write([]byte(header))
 	}
