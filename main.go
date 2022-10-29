@@ -22,6 +22,8 @@ const (
 	papPass  string = "vpn"
 	destHost string = "211.7.230.208"
 	destPort uint16 = 80
+	httpUrl  string = "/"
+	httpHost string = "localhost:80"
 )
 
 var (
@@ -228,7 +230,7 @@ func parseIP(packet []byte) {
 		ackPacket := tcpip.NewTamTCPIP(ack, myIP)
 		sendIPPacket(ackPacket)
 
-		req := tcpip.NewHttpGetRequest("/", "localhost:80")
+		req := tcpip.NewHttpGetRequest(httpUrl, httpHost)
 		pshack := tcpip.TCPIP{
 			DestIP:    destHost,
 			DestPort:  destPort,
