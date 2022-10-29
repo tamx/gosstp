@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
 
 	tcpip "sstp/tcpip"
 )
@@ -200,7 +199,7 @@ func parseIP(packet []byte) {
 	if IP2 != 0xd307e6d0 {
 		return
 	}
-	if synack.ControlFlags[0]|tcpip.SYNACK != 0 {
+	if synack.ControlFlags[0]&tcpip.SYNACK == tcpip.SYNACK {
 		printBytes(packet[:20])
 		// SYNACKに対してACKを送り返す
 		dest := "211.7.230.208"
@@ -233,7 +232,7 @@ func parseIP(packet []byte) {
 		fmt.Print(string(packet[40:]))
 	} else {
 		fmt.Print(string(packet[40:]))
-		os.Exit(0)
+		// os.Exit(0)
 	}
 }
 
