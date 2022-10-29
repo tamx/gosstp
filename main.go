@@ -13,7 +13,9 @@ import (
 )
 
 const (
-	debug = false
+	debug           = false
+	destHost string = "211.7.230.208"
+	destPort uint16 = 80
 )
 
 var (
@@ -197,17 +199,24 @@ func parseIP(packet []byte) {
 	}
 	fmt.Printf("Flag: %02x, IP: %08x\n",
 		synack.ControlFlags[0], IP2)
-	if IP2 != 0xd307e6d0 {
-		return
+	{
+		destIPbytes := tcpip.Iptobyte(destHost)
+		destIP := 0
+		destIP |= int(destIPbytes[0]) << 24
+		destIP |= int(destIPbytes[1]) << 16
+		destIP |= int(destIPbytes[2]) << 8
+		destIP |= int(destIPbytes[3]) << 0
+		if IP2 != destIP {
+			return
+		}
 	}
+	printBytes(packet)
+	fmt.Println(string(synack.TCPData))
 	if synack.ControlFlags[0]&tcpip.SYNACK == tcpip.SYNACK {
-		printBytes(packet[:20])
 		// SYNACKに対してACKを送り返す
-		dest := "211.7.230.208"
-		var port uint16 = 80
 		ack := tcpip.TCPIP{
-			DestIP:    dest,
-			DestPort:  port,
+			DestIP:    destHost,
+			DestPort:  destPort,
 			TcpFlag:   "ACK",
 			SeqNumber: synack.AcknowlegeNumber,
 			AckNumber: calcSequenceNumber(synack.SequenceNumber,
@@ -219,8 +228,8 @@ func parseIP(packet []byte) {
 
 		req := tcpip.NewHttpGetRequest("/", "localhost:80")
 		pshack := tcpip.TCPIP{
-			DestIP:    dest,
-			DestPort:  port,
+			DestIP:    destHost,
+			DestPort:  destPort,
 			TcpFlag:   "PSHACK",
 			SeqNumber: ack.SeqNumber,
 			AckNumber: ack.AckNumber,
@@ -229,20 +238,14 @@ func parseIP(packet []byte) {
 		pshPacket := tcpip.NewTamTCPIP(pshack, myIP)
 		printBytes(pshPacket)
 		sendIPPacket(pshPacket)
-
-		fmt.Print(string(packet[40:]))
 	} else if synack.ControlFlags[0]&tcpip.FINACK == tcpip.FINACK {
-		fmt.Print(string(packet[40:]))
 		os.Exit(0)
 	} else {
-		fmt.Print(string(packet[40:]))
 		// IPヘッダを省いて20byte目からのTCPパケットをパースする
 		serverPshack := synack
-		dest := "211.7.230.208"
-		var port uint16 = 80
 		finack := tcpip.TCPIP{
-			DestIP:    dest,
-			DestPort:  port,
+			DestIP:    destHost,
+			DestPort:  destPort,
 			TcpFlag:   "FINACK",
 			SeqNumber: serverPshack.AcknowlegeNumber,
 			AckNumber: calcSequenceNumber(serverPshack.SequenceNumber,
@@ -254,7 +257,7 @@ func parseIP(packet []byte) {
 	}
 }
 
-func wget() {
+func startTCP() {
 	dest := "211.7.230.208"
 	var port uint16 = 80
 
@@ -266,17 +269,6 @@ func wget() {
 	synPacket := tcpip.NewTamTCPIP(syn, myIP)
 	printBytes(synPacket)
 	sendIPPacket(synPacket)
-
-	// req := tcpip.NewHttpGetRequest("/", "localhost:80")
-	// pshack := tcpip.TCPIP{
-	// 	DestIP:    dest,
-	// 	DestPort:  port,
-	// 	TcpFlag:   "PSHACK",
-	// 	SeqNumber: ack.SeqNumber,
-	// 	AckNumber: ack.AckNumber,
-	// 	Data:      req.ReqtoByteArr(req),
-	// }
-	// tcpip.SendToNginx(sendfd, pshack)
 }
 
 func sendPacket(packet []byte) {
@@ -461,7 +453,7 @@ func parseIPCP(packet []byte) {
 		fmt.Printf("YourIP: %08x, MyIP: %08x, DNS1: %08x\n",
 			yourIP, myIP, dns1)
 		// sendLcpEchoReq(int(lcpID))
-		wget()
+		startTCP()
 	}
 }
 
