@@ -216,6 +216,21 @@ func parseIP(packet []byte) {
 		ackPacket := tcpip.NewTamTCPIP(ack, myIP)
 		printBytes(ackPacket)
 		sendIPPacket(ackPacket)
+
+		req := tcpip.NewHttpGetRequest("/", "localhost:80")
+		pshack := tcpip.TCPIP{
+			DestIP:    dest,
+			DestPort:  port,
+			TcpFlag:   "PSHACK",
+			SeqNumber: ack.SeqNumber,
+			AckNumber: ack.AckNumber,
+			Data:      req.ReqtoByteArr(req),
+		}
+		pshPacket := tcpip.NewTamTCPIP(pshack, myIP)
+		printBytes(pshPacket)
+		sendIPPacket(pshPacket)
+
+		fmt.Print(string(packet[40:]))
 	} else {
 		fmt.Print(string(packet[40:]))
 		os.Exit(0)
@@ -476,9 +491,12 @@ func parse(packet []byte) {
 func main() {
 	// https://www.vpngate.net/ja/
 	host := "public-vpn-218.opengw.net"
+	host = "vpn591814087.opengw.net"
 	conn, err := tls.Dial("tcp",
 		host+":443",
-		&tls.Config{})
+		&tls.Config{
+			InsecureSkipVerify: true,
+		})
 	if err != nil {
 		panic("failed to connect: " + err.Error())
 	}
