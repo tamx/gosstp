@@ -18,6 +18,8 @@ const (
 	// https://www.vpngate.net/ja/
 	sstpHost string = "vpn591814087.opengw.net"
 	sstpPort int    = 443
+	papUser  string = "vpn"
+	papPass  string = "vpn"
 	destHost string = "211.7.230.208"
 	destPort uint16 = 80
 )
@@ -152,7 +154,7 @@ func sstp(conn *tls.Conn) {
 	// 	ctrlpacket = append(ctrlpacket, 0x00, 0x00)
 	// 	send(conn, ctrlpacket, true)
 	// }
-	fmt.Println("OK")
+	fmt.Println("OK SSTP")
 	for {
 		parse(read(conn))
 	}
@@ -424,6 +426,7 @@ func parseIPCP(packet []byte) {
 			dns1 = bytes2IP(packet[12:16])
 		}
 		myIP = IP
+		fmt.Println("OK IPCP")
 		fmt.Printf("YourIP: %08x, MyIP: %08x, DNS1: %08x\n",
 			yourIP, myIP, dns1)
 		// sendLcpEchoReq(int(lcpID))
@@ -436,8 +439,7 @@ func parseLCP(packet []byte) {
 	lcpID := packet[1]
 	if code == 0x01 { // REQ
 		sendLcpPapAck(int(lcpID))
-		sendPAPInfo(int(lcpID),
-			"vpn", "vpn")
+		sendPAPInfo(int(lcpID), papUser, papPass)
 		return
 	} else if code == 0x04 { // REJ
 		return
@@ -453,7 +455,7 @@ func parsePAP(packet []byte) {
 	code := packet[0]
 	lcpID := packet[1]
 	if code == 0x02 { // ACK
-		fmt.Println("OK")
+		fmt.Println("OK PAP")
 		sendIPCPConfREQwithIP(int(lcpID), 0, 0)
 	}
 }
@@ -493,19 +495,16 @@ func main() {
 			"\n"
 		conn.Write([]byte(header))
 	}
-	{
-		pre := byte(0)
-		for {
-			a := read1(conn)
-			if a == '\r' {
-				continue
-			}
-			if pre == '\n' && a == '\n' {
-				break
-			}
-			pre = a
-			// System.out.print(String.format("%c", a));
+	for pre := byte(0); ; {
+		a := read1(conn)
+		if a == '\r' {
+			continue
 		}
+		if pre == '\n' && a == '\n' {
+			break
+		}
+		pre = a
+		// System.out.print(String.format("%c", a));
 	}
 	sstp(conn)
 }
