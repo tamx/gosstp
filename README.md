@@ -6,6 +6,8 @@ https://docs.google.com/document/d/1YZkjqnd39suDhv-_AX7w_OmdhoWwZvZRzQYn8UMfdzg/
     golang で VPN プロトコルにチャレンジ!!
     ハンズオンテキスト
 
+https://openhardsecurity.connpass.com/event/264964/
+
 ## 全体ミッション：
     パケットを読みながら avtokyo.net （自宅サーバ）への HTTP アクセスを成功させよう！
 
