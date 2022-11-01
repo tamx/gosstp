@@ -1,6 +1,7 @@
 package main
 
 // https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-sstp/c50ed240-56f3-4309-8e0c-1644898f0ea8
+// https://www.vpngate.net/ja/
 
 import (
 	"crypto/tls"
@@ -14,16 +15,15 @@ import (
 )
 
 const (
-	debug = false
-	// https://www.vpngate.net/ja/
-	sstpHost string = "vpn591814087.opengw.net"
+	debug           = false
+	sstpHost string = "192.168.0.1"
 	sstpPort int    = 443
-	papUser  string = "vpn"
-	papPass  string = "vpn"
-	destHost string = "211.7.230.208"
-	destPort uint16 = 80
+	papUser  string = "test"
+	papPass  string = "password"
+	destHost string = "192.168.0.1"
+	destPort uint16 = 8080
 	httpUrl  string = "/"
-	httpHost string = "localhost:80"
+	httpHost string = "localhost:8080"
 )
 
 var (
@@ -163,7 +163,7 @@ func sstp(conn *tls.Conn) {
 }
 
 func sendIPPacket(packet []byte) {
-	printBytes(packet)
+	// printBytes(packet)
 	tmp := []byte{
 		byte(0x00), byte(0x21),
 	}
@@ -214,7 +214,7 @@ func parseIP(packet []byte) {
 			return
 		}
 	}
-	printBytes(packet)
+	// printBytes(packet)
 	fmt.Println(string(synack.TCPData))
 	// 0x12 = SYNACK, 0x11 = FINACK, 0x10 = ACK
 	if synack.ControlFlags[0]&tcpip.SYNACK == tcpip.SYNACK {
@@ -222,7 +222,7 @@ func parseIP(packet []byte) {
 		ack := tcpip.TCPIP{
 			DestIP:    destHost,
 			DestPort:  destPort,
-			TcpFlag:   "ACK",
+			TcpFlag:   "FINACK",
 			SeqNumber: synack.AcknowlegeNumber,
 			AckNumber: calcSequenceNumber(synack.SequenceNumber,
 				1),
@@ -289,6 +289,18 @@ func sendPAPInfo(lcpID int, username, password string) {
 	buf = append(buf, byte(len(password)))
 	buf = append(buf, []byte(password)...)
 	sendPacket(buf)
+}
+
+func sendLcpPapNak(lcpId int) {
+	len := 8
+	lcp_ack := []byte{
+		byte(0xc0), 0x21,
+		3 /* ACK */, byte(lcpId), /*lcp id */
+		(byte)(len >> 8), (byte)(0xff & len),
+		3 /* auth */, 4, /* len */
+		byte(0xc0), byte(0x23), // PAP
+	}
+	sendPacket(lcp_ack)
 }
 
 func sendLcpPapAck(lcpId int) {
@@ -440,8 +452,13 @@ func parseLCP(packet []byte) {
 	code := packet[0]
 	lcpID := packet[1]
 	if code == 0x01 { // REQ
-		sendLcpPapAck(int(lcpID))
-		sendPAPInfo(int(lcpID), papUser, papPass)
+		authType := (int(packet[6])<<8 | int(packet[7]))
+		if authType == 0xc023 {
+			sendLcpPapAck(int(lcpID))
+			sendPAPInfo(int(lcpID), papUser, papPass)
+		} else {
+			sendLcpPapNak(int(lcpID))
+		}
 		return
 	} else if code == 0x04 { // REJ
 		return
